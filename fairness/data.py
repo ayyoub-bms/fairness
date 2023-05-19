@@ -110,7 +110,17 @@ def load_adult_data(onehot=False, labeling=True, clean_missing=True,
     data_tests = data.iloc[n:]
 
     if subsample:
-        selected_indices = _sample(data_train, target_train, sensitive)
+        full_index = data_train.index
+        selected_indices = np.random.choice(full_index,
+                                            len(target_train) // divider)
+
+        ix = full_index.difference(selected_indices)
+
+        selected_indices = np.concatenate([
+            selected_indices,
+            _sample(data_train, target_train, sensitive, ix)
+        ])
+
         data_train = data_train.iloc[selected_indices]
         target_train = target_train.iloc[selected_indices]
 
@@ -254,12 +264,14 @@ def load_german_data(onehot=True, labeling=True, standardize=False,
     ]
 
     target = data['badcredit'] - 1
+    sensitive = 'foreign'
     data.drop('badcredit', axis=1, inplace=True)
-
-    categorical = data.columns.difference([
+    numerical = [
         'duration', 'crdtamt', 'installment', 'residsince', 'age', 'nbcred',
-        'nbliable', 'tel', 'foreign'
-    ])
+        'nbliable'
+    ]
+    categorical = data.columns.difference(numerical + ['tel', 'foreign'])
+
     # Transform binary features
     data['tel'] = (data['tel'] == 'A191').astype(int)
     data['foreign'] = (data['foreign'] == 'A201').astype(int)
@@ -275,12 +287,30 @@ def load_german_data(onehot=True, labeling=True, standardize=False,
 
     if standardize:
         scaler = StandardScaler()
-        data[to_scale] = scaler.fit_transform(data[to_scale])
+        data[numerical] = scaler.fit_transform(data[numerical])
 
-    return *train_test_split(data,
-                             target,
-                             train_size=train_size,
-                             **kwargs), 'foreign'
+    data_train, data_tests, target_train, target_tests = train_test_split(
+            data,
+            target,
+            train_size=train_size,
+            **kwargs)
+
+    # We add 4 samples from the cross product {0, 1} x {0, 1} to
+    # make sure that we have in the test set at least one sample
+    # with ground truth in {0, 1} and sensitive feature with values
+    # in {0, 1}
+    ix = _sample(data_train, target_train, sensitive, data_train.index)
+    xrows = data_train.iloc[ix]
+    yrows = target_train.iloc[ix]
+
+    # add the samples to the test set
+    data_tests = data_tests.merge(xrows)
+    target_tests = pd.concat([target_tests, yrows])
+
+    # Remove the samples from the training set
+    data_train.drop(xrows.index, inplace=True)
+    target_train.drop(yrows.index, inplace=True)
+    return data_train, data_tests, target_train, target_tests, sensitive
 
 
 def load_arrhythmia_data(clean_missing=True, standardize=False, train_size=.7,
@@ -387,7 +417,7 @@ def binarize(data, categorical):
     )
     cat2hot.set_output(transform='pandas')
     cat2hot.verbose_feature_names_out = False
-    return cat2hot.fit_transform(data)
+    return cat2hot.fit_transform(data).astype(int)
 
 
 def get_data(url, filename, **kwargs):
@@ -398,30 +428,23 @@ def get_data(url, filename, **kwargs):
     return df
 
 
-def _sample(data_train, target_train, sensitive, divider=10):
+def _sample(data_train, target_train, sensitive, indices):
     """ Make sure to have at least one case for each
     sensitive value and ground truth value
     """
-    full_index = data_train.index
-    # after random sampling
-    selected_indices = np.random.choice(full_index,
-                                        len(target_train) // divider)
-
-    remaining_indices = full_index.difference(selected_indices)
-
     x00 = np.random.choice(np.where(
-        (target_train.loc[remaining_indices] == 0) &
-        (data_train.loc[remaining_indices, s] == 0))[0], 1)[0]
+        (target_train.loc[indices] == 0) &
+        (data_train.loc[indices, s] == 0))[0], 1)[0]
 
     x01 = np.random.choice(np.where(
-        (target_train.loc[remaining_indices] == 0) &
-        (data_train.loc[remaining_indices, s] == 1))[0], 1)[0]
+        (target_train.loc[indices] == 0) &
+        (data_train.loc[indices, s] == 1))[0], 1)[0]
 
     x10 = np.random.choice(np.where(
-        (target_train.loc[remaining_indices] == 1) &
-        (data_train.loc[remaining_indices, s] == 0))[0], 1)[0]
+        (target_train.loc[indices] == 1) &
+        (data_train.loc[indices, s] == 0))[0], 1)[0]
 
     x11 = np.random.choice(np.where(
-        (target_train.loc[remaining_indices] == 1) &
-        (data_train.loc[remaining_indices, s] == 1))[0], 1)[0]
-    return np.concatenate([selected_indices, [x00, x01, x10, x11]])
+        (target_train.loc[indices] == 1) &
+        (data_train.loc[indices, s] == 1))[0], 1)[0]
+    return [x00, x01, x10, x11]
