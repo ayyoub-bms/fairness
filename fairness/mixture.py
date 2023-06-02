@@ -1,5 +1,4 @@
 import numpy as np
-from numpy import ndarray
 from scipy.stats import multivariate_normal, norm
 
 
