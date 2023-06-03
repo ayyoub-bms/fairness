@@ -64,7 +64,13 @@ def optimal_decision(theta, y_pred, y_prob, s):
 
     prob_y1s1 = np.mean(y_pred & s)
     prob_y1s0 = np.mean(y_pred & ~s)
-
     y_opt[s_mask] = ((1 - y_prob_s1 * (2 - theta / prob_y1s1)) <= 0).astype(int)
     y_opt[~s_mask] = ((1 - y_prob_s0 * (2 + theta / prob_y1s0)) <= 0).astype(int)
     return y_opt
+
+
+def get_npv_optimal_params(param_list, accuracies, equal_opportunities, threshold=.9):
+    max_accuracy = np.max(accuracies)
+    indices = np.where(accuracies > threshold * max_accuracy)
+    index = np.argmin(equal_opportunities[indices])
+    return param_list[indices][index]
