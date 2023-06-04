@@ -11,7 +11,7 @@ URL = 'https://archive.ics.uci.edu/ml/machine-learning-databases/'
 
 
 def load_adult_data(onehot=False, labeling=True, clean_missing=True,
-                    subsample=False, standardize=True, **kwargs):
+                    standardize=True):
     """ Loads adult data downloaded from UCI ML website
     Also known as "Census Income" dataset.
 
@@ -25,18 +25,12 @@ def load_adult_data(onehot=False, labeling=True, clean_missing=True,
 
         labeling: bool
             Transform strings into integer labels
-        train_size: float
-            Percentage of train data for train/test split.
 
         clean_missing: bool
             Remove missing data
 
         standardize: bool
             Transform data with mean > 1 to have 0 mean and 1 std.
-
-        **kwargs: dict
-            Any parameters to pass to the train test split function
-            train_test_split
 
     Returns
     -------
@@ -48,12 +42,17 @@ def load_adult_data(onehot=False, labeling=True, clean_missing=True,
 
         sklearn.model_selection.train_test_split
     """
+    
+    sensitive = 'gender'
 
-    data_train = get_data(URL+'adult/', 'adult.data', header=None)
-    data_tests = get_data(URL+'adult/', 'adult.test', header=None, skiprows=1)
+    data_train = _get_data(URL + 'adult/', 'adult.data', header=None)
+    data_tests = _get_data(URL + 'adult/', 'adult.test', header=None, skiprows=1)
+    
+    n = data_train.shape[0]
+    
     columns = [
         'age', 'workclass', 'fnlwgt', 'education', 'education-num',
-        'marital_status', 'occupation', 'relationship', 'race', 'sex',
+        'marital_status', 'occupation', 'relationship', 'race', 'gender',
         'capital_gain', 'capital_loss', 'hours_per_week', 'native_country',
         'income'
     ]
@@ -63,11 +62,13 @@ def load_adult_data(onehot=False, labeling=True, clean_missing=True,
         'workclass', 'marital_status', 'occupation',
         'relationship', 'race', 'native_country',
     ]
-    sensitive = 'sex'
-    n = data_train.shape[0]
+
     data_train.columns = columns
     data_tests.columns = columns
-    data_tests['income'] = data_tests['income'].str.replace(' >50K.', ' >50K')
+
+    data_tests['income'] = data_tests['income'].str.replace(
+        ' >50K.', ' >50K', regex=False
+    )
     data = pd.concat([data_train, data_tests])
 
     # drop missing values
@@ -77,21 +78,23 @@ def load_adult_data(onehot=False, labeling=True, clean_missing=True,
         data.dropna(inplace=True)
 
     # set the sensitive feature
-    data['sex'] = (data['sex'] == ' Female').astype(int)
+    data['gender'] = (data['gender'] == ' Female').astype(int)
+
+    data['marital_status'] = data['marital_status'].str.replace(
+        ' Married*', 'Married', regex=True
+    )
+
+    data['marital_status'] = data['marital_status'].str.replace(
+        '^(?!Married).*', 'Not-Married', regex=True
+    )
 
     # Building the target
     target = (data['income'] == ' >50K').astype(int)
 
-    to_drop = ['education', 'income']
+    to_drop = ['education', 'income', 'fnlwgt']
+
     # We don't need the target variable in the features dataset
     data.drop(to_drop, axis=1, inplace=True)
-    if standardize:
-        # scaling full dataset instead of fitting on train and applying on test
-        to_scale = list(
-            set(columns).difference(categorical + to_drop + ['sex'])
-        )
-        scaler = StandardScaler()
-        data[to_scale] = scaler.fit_transform(data[to_scale])
 
     if labeling:
         encoder = LabelEncoder()
@@ -101,7 +104,7 @@ def load_adult_data(onehot=False, labeling=True, clean_missing=True,
     if onehot:
         # One hot encoding setup
         # Transform each categorical data to its one hot counterpart
-        data = binarize(data, categorical)
+        data = _binarize(data, categorical)
 
     target_train = target.iloc[:n]
     target_tests = target.iloc[n:]
@@ -109,26 +112,27 @@ def load_adult_data(onehot=False, labeling=True, clean_missing=True,
     data_train = data.iloc[:n]
     data_tests = data.iloc[n:]
 
-    if subsample:
-        full_index = data_train.index
-        selected_indices = np.random.choice(full_index,
-                                            len(target_train) // divider)
+    del data
 
-        ix = full_index.difference(selected_indices)
+    if standardize:
+        if labeling:
+            to_scale = data_train.columns.difference([sensitive])
+        else:
+            to_scale = list(
+                data_train.columns.difference(
+                    categorical + to_drop + [sensitive]
+                )
+            )
+        
+        scaler = StandardScaler()
+        scaler.fit(data_train[to_scale])
+        data_train[to_scale] = scaler.transform(data_train[to_scale])
+        data_tests[to_scale] = scaler.transform(data_tests[to_scale])
 
-        selected_indices = np.concatenate([
-            selected_indices,
-            _sample(data_train, target_train, sensitive, ix)
-        ])
-
-        data_train = data_train.iloc[selected_indices]
-        target_train = target_train.iloc[selected_indices]
-
-    return data_train, data_tests, target_train, target_tests, sensitive
+    return data_train, target_train, data_tests, target_tests, sensitive
 
 
-def load_drug_data(drug_name='heroin', train_size=.7, standardize=False,
-                   **kwargs):
+def load_drug_data(drug='heroin', train_size=.7, standardize=True, **kwargs):
     """ Load drug data downloaded from UCI ML website
 
 
@@ -138,7 +142,7 @@ def load_drug_data(drug_name='heroin', train_size=.7, standardize=False,
     Parameters
     ----------
 
-        drug_name: str
+        drug: str
             One of the drug consumptions to classify amongst
             01- alcohol
             02- amphet
@@ -180,6 +184,7 @@ def load_drug_data(drug_name='heroin', train_size=.7, standardize=False,
 
         sklearn.model_selection.train_test_split
     """
+    sensitive = 'ethnicity'
 
     numerical = [
         'age', 'gender', 'education', 'country', 'ethnicity', 'n_score',
@@ -189,33 +194,40 @@ def load_drug_data(drug_name='heroin', train_size=.7, standardize=False,
     categorical = [
         'alcohol', 'amphet', 'amyl', 'benzos', 'caff', 'cannabis', 'choc',
         'coke', 'crack', 'ecstasy', 'heroin', 'ketamine', 'legalh', 'lsd',
-        'meth', 'mushrooms', 'nicotine', 'semer', 'vsa',
+        'meth', 'mushrooms', 'nicotine', 'semer', 'vsa'
     ]
 
-    assert (drug_name in categorical), f'Unkown drug name {drug_name}'
+    assert (drug in categorical), f'Unkown drug name {drug}'
 
-    data = get_data(URL+'00373/', 'drug_consumption.data', header=None)
+    data = _get_data(URL + '00373/', 'drug_consumption.data', header=None)
+
     data.columns = ['ID'] + numerical + categorical
+
+    numerical.remove(sensitive)
+
     data.set_index('ID', inplace=True)
-    data = data[numerical + [drug_name]]
 
-    data['ethnicity'] = (data['ethnicity'] == -0.31685).astype(int)
+    target = (data[drug] == 'CL0').astype(int)
+    
+    data = data[numerical + [sensitive]]
+    data[sensitive] = (data[sensitive] == -0.31685).astype(int)
 
-    target = (data[drug_name] == 'CL0').astype(int)
-
-    data.drop(drug_name, axis=1, inplace=True)
-
-    if standardize:
-        scaler = StandardScaler()
-        data[numerical] = scaler.fit_transform(data[numerical])
-
-    return (
-        *train_test_split(data, target, train_size=train_size, **kwargs),
-        'ethnicity'
+    data_train, target_train, data_tests, target_tests, sensitive = _gen_data(
+        data, target, train_size, sensitive, **kwargs
     )
 
+    del data
+    
+    if standardize:
+        scaler = StandardScaler()
+        scaler.fit(data_train[numerical])
+        data_train[numerical] = scaler.transform(data_train[numerical])
+        data_tests[numerical] = scaler.transform(data_tests[numerical])
 
-def load_german_data(onehot=True, labeling=True, standardize=False,
+    return data_train, target_train, data_tests, target_tests, sensitive
+
+
+def load_german_data(onehot=True, labeling=True, standardize=True,
                      train_size=.7, **kwargs):
     """ Loads German credit data downloaded from UCI ML website
 
@@ -252,24 +264,28 @@ def load_german_data(onehot=True, labeling=True, standardize=False,
         sklearn.model_selection.train_test_split
     """
 
-    data = get_data(URL+'statlog/german/', 'german.data',
-                    header=None,
-                    sep='\\s+')
+    sensitive = 'foreign'
+
+    data = _get_data(URL + 'statlog/german/', 'german.data',
+                     header=None,
+                     sep='\\s+')
+
+    numerical = [
+        'duration', 'crdtamt', 'installment', 'residsince', 'age', 'nbcred',
+        'nbliable'
+    ]
 
     data.columns = [
         'accstatus', 'duration', 'history', 'purpose', 'crdtamt',
-        'savings', 'employment', 'installment', 'maritalsex',
+        'savings', 'employment', 'installment', 'maritalgender',
         'debtgarant', 'residsince', 'property', 'age', 'othinstplans',
         'housing', 'nbcred', 'job', 'nbliable', 'tel', 'foreign', 'badcredit'
     ]
 
     target = data['badcredit'] - 1
-    sensitive = 'foreign'
+    
     data.drop('badcredit', axis=1, inplace=True)
-    numerical = [
-        'duration', 'crdtamt', 'installment', 'residsince', 'age', 'nbcred',
-        'nbliable'
-    ]
+    
     categorical = data.columns.difference(numerical + ['tel', 'foreign'])
 
     # Transform binary features
@@ -283,37 +299,24 @@ def load_german_data(onehot=True, labeling=True, standardize=False,
 
     # One hot encoding of other categorical data
     if onehot:
-        data = binarize(data, categorical)
+        data = _binarize(data, categorical)
+
+    data_train, target_train, data_tests, target_tests, sensitive = _gen_data(
+        data, target, train_size, sensitive, **kwargs
+    )
+
+    del data
 
     if standardize:
         scaler = StandardScaler()
-        data[numerical] = scaler.fit_transform(data[numerical])
+        scaler.fit(data_train[numerical])
+        data_train[numerical] = scaler.transform(data_train[numerical])
+        data_tests[numerical] = scaler.transform(data_tests[numerical])
 
-    data_train, data_tests, target_train, target_tests = train_test_split(
-            data,
-            target,
-            train_size=train_size,
-            **kwargs)
-
-    # We add 4 samples from the cross product {0, 1} x {0, 1} to
-    # make sure that we have in the test set at least one sample
-    # with ground truth in {0, 1} and sensitive feature with values
-    # in {0, 1}
-    ix = _sample(data_train, target_train, sensitive, data_train.index)
-    xrows = data_train.iloc[ix]
-    yrows = target_train.iloc[ix]
-
-    # add the samples to the test set
-    data_tests = data_tests.merge(xrows)
-    target_tests = pd.concat([target_tests, yrows])
-
-    # Remove the samples from the training set
-    data_train.drop(xrows.index, inplace=True)
-    target_train.drop(yrows.index, inplace=True)
-    return data_train, data_tests, target_train, target_tests, sensitive
+    return data_train, target_train, data_tests, target_tests, sensitive
 
 
-def load_arrhythmia_data(clean_missing=True, standardize=False, train_size=.7,
+def load_arrhythmia_data(clean_missing=True, standardize=True, train_size=.7,
                          **kwargs):
     """ Loads Arrhythmia dataset from UCI Machine Learning website
 
@@ -342,9 +345,9 @@ def load_arrhythmia_data(clean_missing=True, standardize=False, train_size=.7,
 
     """
 
-    data = get_data(URL+'arrhythmia/', 'arrhythmia.data', header=None)
+    data = _get_data(URL + 'arrhythmia/', 'arrhythmia.data', header=None)
     data.columns = (
-        ['age', 'sex', 'heigh', 'weight', 'qrs_duration', 'pr_interval',
+        ['age', 'gender', 'heigh', 'weight', 'qrs_duration', 'pr_interval',
          'qt_interval', 't_interval', 'p_interval', 'qrs', 't', 'p', 'qrst',
          'j', 'heart_rate', 'avg_width_qwave', 'avg_width_rwave',
          'avg_width_swave', 'avg_width_rpwave', 'avg_width_spwave',
@@ -361,7 +364,7 @@ def load_arrhythmia_data(clean_missing=True, standardize=False, train_size=.7,
         + [f'ch_v4{i}' for i in range(124, 136)]
         + [f'ch_v5{i}' for i in range(136, 148)]
         + [f'ch_v6{i}' for i in range(148, 160)]
-        + ['amp_jjwave', 'amp_rwave', 'amp_qwave', 'amp_swave',
+        + ['amp_jwave', 'amp_rwave', 'amp_qwave', 'amp_swave',
            'amp_rpwave', 'amp_spwave', 'amp_pwave', 'amp_twave', 'qrsa',
            'qrsta']
         + [f'ch_dii{i}' for i in range(170, 180)]
@@ -376,41 +379,42 @@ def load_arrhythmia_data(clean_missing=True, standardize=False, train_size=.7,
         + [f'ch_v5{i}' for i in range(260, 270)]
         + [f'ch_v6{i}' for i in range(270, 280)] + ['arrhythmia'])
 
+    sensitive = 'gender'
     if clean_missing:
         data.replace('?', np.nan, inplace=True)
         for c in data.columns:
             data[c] = data[c].fillna(data[c].mode()[0])
 
     data = data.astype(float)
-    target = data['arrhythmia'].copy()
-    data.drop('arrhythmia', inplace=True, axis=1)
 
+    data[sensitive] = data[sensitive].astype(int)
+
+    target = data['arrhythmia'].astype(int)
     target[target > 1] = 0
 
-    data_train, data_tests, target_train, target_tests = (
-            train_test_split(data,
-                             target,
-                             train_size=train_size,
-                             **kwargs)
+    # Drop all columns where 98% of the data are 0s
+    mask = (~data.eq(0)).sum() < 10
+    to_drop = data.loc[:, mask].columns.tolist()
+
+    to_drop.append('arrhythmia')
+    data.drop(to_drop, inplace=True, axis=1)
+
+    data_train, target_train, data_tests, target_tests, sensitive = _gen_data(
+        data, target, train_size, sensitive, **kwargs
     )
+    
+    del data
 
     if standardize:
-        # Scale only features with max > 1
-        to_scale = (
-                (data.max() > 1 | data.min() < 0)
-                .replace(False, np.nan)
-                .dropna()
-                .index
-        )
         scaler = StandardScaler()
-        scaler = scaler.fit(data_train[to_scale])
-        data_train[to_scale] = scaler.transform(data_train[to_scale])
-        data_tests[to_scale] = scaler.transform(data_tests[to_scale])
+        scaler.fit(data_train)
+        data_train[:] = scaler.transform(data_train)
+        data_tests[:] = scaler.transform(data_tests)
 
-    return data_train, data_tests, target_train, target_tests, 'sex'
+    return data_train, target_train, data_tests, target_tests, sensitive
 
 
-def binarize(data, categorical):
+def _binarize(data, categorical) -> pd.DataFrame:
     cat2hot = make_column_transformer(
         (OneHotEncoder(sparse_output=False), categorical),
         remainder='passthrough'
@@ -420,7 +424,7 @@ def binarize(data, categorical):
     return cat2hot.fit_transform(data).astype(int)
 
 
-def get_data(url, filename, **kwargs):
+def _get_data(url, filename, **kwargs) -> pd.DataFrame:
     if os.path.exists(filename):
         return pd.read_csv(filename, index_col=0)
     df = pd.read_csv(url+filename, **kwargs)
@@ -434,17 +438,47 @@ def _sample(data_train, target_train, sensitive, indices):
     """
     x00 = np.random.choice(np.where(
         (target_train.loc[indices] == 0) &
-        (data_train.loc[indices, s] == 0))[0], 1)[0]
+        (data_train.loc[indices, sensitive] == 0))[0], 1)[0]
 
     x01 = np.random.choice(np.where(
         (target_train.loc[indices] == 0) &
-        (data_train.loc[indices, s] == 1))[0], 1)[0]
+        (data_train.loc[indices, sensitive] == 1))[0], 1)[0]
 
     x10 = np.random.choice(np.where(
         (target_train.loc[indices] == 1) &
-        (data_train.loc[indices, s] == 0))[0], 1)[0]
+        (data_train.loc[indices, sensitive] == 0))[0], 1)[0]
 
     x11 = np.random.choice(np.where(
         (target_train.loc[indices] == 1) &
-        (data_train.loc[indices, s] == 1))[0], 1)[0]
+        (data_train.loc[indices, sensitive] == 1))[0], 1)[0]
+    
     return [x00, x01, x10, x11]
+
+
+def _gen_data(data, target, train_size, sensitive, **kwargs):
+    # We add 4 samples from the cross product {0, 1} x {0, 1} to
+    # make sure that we have in the test set at least one sample
+    # with ground truth in {0, 1} and sensitive feature with values
+    # in {0, 1}
+    ix = _sample(data, target, sensitive, data.index)
+    xrows = data.iloc[ix]
+    yrows = target.iloc[ix]
+    
+    data.drop(xrows.index, inplace=True)
+    target.drop(yrows.index, inplace=True)
+
+    data_train, data_tests, target_train, target_tests = train_test_split(
+        data,
+        target,
+        train_size=train_size,
+        **kwargs
+    )
+
+    data_tests = pd.concat([data_tests, xrows])
+    target_tests = pd.concat([target_tests, yrows])
+    return data_train, target_train, data_tests, target_tests, sensitive
+
+
+def subsample_training(x, y, s, p=.5):
+    si = np.random.choice(x.index, int(p * len(y)))
+    return x.loc[si], y.loc[si]

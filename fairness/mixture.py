@@ -73,8 +73,8 @@ def estimate(X, y, s):
     cov0, cov1 = _class_cov(X, s)
     p0 = y[np.where(s == 0)[0]].mean()
     p1 = y[np.where(s == 1)[0]].mean()
-    r = regression_function(X, s, p0, p1, mu00, mu01, mu10, mu11, cov0, cov1)
-    return r, (r > .5).astype(int)
+    args = (p0, p1, mu00, mu01, mu10, mu11, cov0, cov1)
+    return args
 
 
 def regression_function(X, s, p0, p1, mu00, mu01, mu10, mu11, cov0, cov1):
