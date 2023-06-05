@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 
 from sklearn.preprocessing import OneHotEncoder, StandardScaler, LabelEncoder
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold, train_test_split
 from sklearn.compose import make_column_transformer
 
 
@@ -207,7 +207,7 @@ def load_drug_data(drug='heroin', train_size=.7, standardize=True, **kwargs):
 
     data.set_index('ID', inplace=True)
 
-    target = (data[drug] == 'CL0').astype(int)
+    target = (data[drug] != 'CL0').astype(int)
     
     data = data[numerical + [sensitive]]
     data[sensitive] = (data[sensitive] == -0.31685).astype(int)
@@ -432,10 +432,12 @@ def _get_data(url, filename, **kwargs) -> pd.DataFrame:
     return df
 
 
-def _sample(data_train, target_train, sensitive, indices):
+def sample_distinct_cases(data_train, target_train, sensitive, indices=None):
     """ Make sure to have at least one case for each
     sensitive value and ground truth value
     """
+    indices = indices or data_train.index
+    
     x00 = np.random.choice(np.where(
         (target_train.loc[indices] == 0) &
         (data_train.loc[indices, sensitive] == 0))[0], 1)[0]
@@ -460,7 +462,7 @@ def _gen_data(data, target, train_size, sensitive, **kwargs):
     # make sure that we have in the test set at least one sample
     # with ground truth in {0, 1} and sensitive feature with values
     # in {0, 1}
-    ix = _sample(data, target, sensitive, data.index)
+    ix = sample_distinct_cases(data, target, sensitive)
     xrows = data.iloc[ix]
     yrows = target.iloc[ix]
     
@@ -481,4 +483,19 @@ def _gen_data(data, target, train_size, sensitive, **kwargs):
 
 def subsample_training(x, y, s, p=.5):
     si = np.random.choice(x.index, int(p * len(y)))
-    return x.loc[si], y.loc[si]
+    return x.loc[si], y.loc[si], s.loc[si]
+
+
+def folds_generator(x, y, s, n_splits=10, shuffle=False):
+    
+    folds = StratifiedKFold(n_splits=n_splits, shuffle=shuffle)
+    cases = set(sample_distinct_cases(x, y, s))
+    
+    for train, test in folds.split(x, y):
+        to_test = set(train).intersection(cases)
+        
+        for elt in to_test:
+            train = np.delete(train, np.where(train == elt))
+            test = np.append(test, elt)
+
+        yield train, test
